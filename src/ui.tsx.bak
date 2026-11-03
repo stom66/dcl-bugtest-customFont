@@ -1,0 +1,290 @@
+import { Color4 } from '@dcl/sdk/math'
+import ReactEcs, { Button, Label, ReactEcsRenderer, UiEntity } from '@dcl/sdk/react-ecs'
+
+import { FontAwesome } from './components/fontAwesome'
+import { FONT_AWESOME_ICONS } from './fonts'
+
+
+const COLUMN_COUNT = 4
+const PER_COLUMN   = 16
+const SAMPLE_COUNT = COLUMN_COUNT * PER_COLUMN
+const COLUMN_GAP   = 12
+const ROW_HEIGHT   = 56
+const LABEL_WIDTH  = 270
+
+const TILE  = Color4.create(0.15, 0.17, 0.22, 1)
+const MUTED = Color4.create(0.7, 0.75, 0.8, 1)
+const INK   = Color4.White()
+
+
+type SampleIcon = {
+	name   : string
+	code   : number
+	unicode: string
+}
+
+type SampleColumnProps = {
+	key   : string
+	icons : readonly SampleIcon[]
+	isLast: boolean
+}
+
+
+// MARK: buildIconBands
+/** Group canonical icons by unicode high byte so a draw can cover every cmap block. */
+function buildIconBands(): SampleIcon[][] {
+	const bands = new Map<number, SampleIcon[]>()
+
+	for (const name of Object.keys(FONT_AWESOME_ICONS)) {
+		const entry = FONT_AWESOME_ICONS[name]
+		const code = parseInt(entry.unicode, 16)
+		// Basic Latin in this font is digits and letters, not icons. Skip it so
+		// the top of the grid is not the same handful of characters every draw.
+		if (code < 0xE000) {
+			continue
+		}
+		const band = code >>> 8
+		const icon  = {
+			name,
+			code,
+			unicode: entry.unicode,
+		}
+		const list = bands.get(band)
+		if (list) {
+			list.push(icon)
+		} else {
+			bands.set(band, [icon])
+		}
+	}
+
+	return [...bands.keys()]
+		.sort((left, right) => left - right)
+		.map((band) => bands.get(band) ?? [])
+}
+
+
+// MARK: spreadExtraBands
+/** Band indexes that receive one extra slot, spaced across the font rather than the first blocks. */
+function spreadExtraBands(
+	bandCount: number,
+	extra    : number,
+): Set<number> {
+	const indexes = new Set<number>()
+	if (bandCount <= 0 || extra <= 0) {
+		return indexes
+	}
+
+	const count = Math.min(extra, bandCount)
+	for (let slot = 0; slot < count; slot++) {
+		const index = Math.min(bandCount - 1, Math.floor(((slot + 0.5) * bandCount) / count))
+		indexes.add(index)
+	}
+	return indexes
+}
+
+
+const ICON_BANDS  = buildIconBands()
+const EXTRA_BANDS = spreadExtraBands(ICON_BANDS.length, SAMPLE_COUNT % ICON_BANDS.length)
+
+
+// MARK: shuffle
+function shuffle<T>(items: readonly T[]): T[] {
+	const copy = items.slice()
+	for (let index = copy.length - 1; index > 0; index--) {
+		const swapIndex = Math.floor(Math.random() * (index + 1))
+		const current   = copy[index]
+		copy[index]     = copy[swapIndex]
+		copy[swapIndex] = current
+	}
+	return copy
+}
+
+
+// MARK: pickBroadSample
+/** Pick 64 icons with every unicode block represented, then shuffle the grid. */
+function pickBroadSample(): SampleIcon[] {
+	const picked    : SampleIcon[] = []
+	const leftover  : SampleIcon[] = []
+	const baseQuota = Math.floor(SAMPLE_COUNT / ICON_BANDS.length)
+
+	for (let index = 0; index < ICON_BANDS.length; index++) {
+		const band  = shuffle(ICON_BANDS[index])
+		const quota = baseQuota + (EXTRA_BANDS.has(index) ? 1 : 0)
+		const take  = Math.min(quota, band.length)
+		for (let item = 0; item < band.length; item++) {
+			if (item < take) {
+				picked.push(band[item])
+			} else {
+				leftover.push(band[item])
+			}
+		}
+	}
+
+	if (picked.length < SAMPLE_COUNT) {
+		const fill = shuffle(leftover)
+		for (let index = 0; index < fill.length && picked.length < SAMPLE_COUNT; index++) {
+			picked.push(fill[index])
+		}
+	}
+
+	return shuffle(picked.slice(0, SAMPLE_COUNT))
+}
+
+
+// MARK: toColumns
+function toColumns(icons: readonly SampleIcon[]): SampleIcon[][] {
+	const columns: SampleIcon[][] = []
+	for (let column = 0; column < COLUMN_COUNT; column++) {
+		const start = column * PER_COLUMN
+		columns.push(icons.slice(start, start + PER_COLUMN))
+	}
+	return columns
+}
+
+
+// MARK: SampleColumn
+function SampleColumn(props: SampleColumnProps) {
+	const icons  = props.icons
+	const isLast = props.isLast
+
+	return (
+		<UiEntity
+			uiTransform={{
+				width        : '24%',
+				height       : '100%',
+				display      : 'flex',
+				flexDirection: 'column',
+				flexShrink   : 1,
+				alignItems   : 'flex-start',
+				margin       : { right: isLast ? 0 : COLUMN_GAP },
+			}}
+		>
+			{icons.map((icon) => (
+				<UiEntity
+					key={icon.name}
+					uiTransform={{
+						width        : '100%',
+						height       : ROW_HEIGHT,
+						display      : 'flex',
+						flexDirection: 'row',
+						alignItems   : 'center',
+						flexShrink   : 0,
+					}}
+				>
+					<UiEntity
+						uiTransform={{
+							width         : 40,
+							height        : 40,
+							flexShrink    : 0,
+							margin        : { right: 10 },
+							display       : 'flex',
+							alignItems    : 'center',
+							justifyContent: 'center',
+						}}
+						uiBackground={{ color: TILE }}
+					>
+						<FontAwesome icon={icon.name} fontSize={26} />
+					</UiEntity>
+					<Label
+						value={icon.name}
+						fontSize={16}
+						color={INK}
+						textAlign="middle-left"
+						textWrap="nowrap"
+						uiTransform={{
+							width   : LABEL_WIDTH,
+							height  : 40,
+							overflow: 'hidden',
+						}}
+					/>
+				</UiEntity>
+			))}
+		</UiEntity>
+	)
+}
+
+
+// MARK: setupUi
+/** Mount the font debug UI (virtual 1920×1080). */
+export function setupUi() {
+	ReactEcsRenderer.setUiRenderer(uiMenu, { virtualWidth: 1920, virtualHeight: 1080 })
+}
+
+
+// MARK: uiMenu
+/** One Font Awesome grid: 4 columns of 16, redrawn from across the font. */
+export const uiMenu = () => {
+	const [icons, setIcons] = ReactEcs.useState<SampleIcon[]>(pickBroadSample)
+	const columns           = toColumns(icons)
+
+	return (
+		<UiEntity
+			uiTransform={{
+				positionType : 'absolute',
+				position     : { top: 0, right: 0 },
+				width        : '75%',
+				height       : '100%',
+				display      : 'flex',
+				flexDirection: 'column',
+				alignItems   : 'flex-start',
+				padding      : { top: 32, right: 24, bottom: 32, left: 24 },
+			}}
+			uiBackground={{ color: Color4.create(0.08, 0.09, 0.12, 0.92) }}
+		>
+			<UiEntity
+				uiTransform={{
+					width         : '100%',
+					height        : 48,
+					display       : 'flex',
+					flexDirection : 'row',
+					alignItems    : 'center',
+					justifyContent: 'flex-start',
+					margin        : { bottom: 8 },
+				}}
+			>
+				<Label
+					value="Font Awesome fontSrc debug"
+					fontSize={28}
+					color={INK}
+					textAlign="middle-left"
+					uiTransform={{ width: 520, height: 40, margin: { right: 16 } }}
+				/>
+				<Button
+					value="Randomize"
+					variant="primary"
+					fontSize={18}
+					textAlign="middle-center"
+					onMouseDown={() => {
+						setIcons(pickBroadSample())
+					}}
+					uiTransform={{ width: 200, height: 44 }}
+				/>
+			</UiEntity>
+			<Label
+				value="4 columns x 16 icons, a fresh spread from across the font. npm run start:bundles — plain preview shows tofu for PUA glyphs."
+				fontSize={15}
+				color={MUTED}
+				textAlign="middle-left"
+				uiTransform={{ width: '100%', height: 28, margin: { bottom: 12 } }}
+			/>
+			<UiEntity
+				uiTransform={{
+					width         : '100%',
+					height        : 896,
+					display       : 'flex',
+					flexDirection : 'row',
+					alignItems    : 'flex-start',
+					justifyContent: 'flex-start',
+				}}
+			>
+				{columns.map((column, columnIndex) => (
+					<SampleColumn
+						key={`column-${columnIndex}`}
+						icons={column}
+						isLast={columnIndex === COLUMN_COUNT - 1}
+					/>
+				))}
+			</UiEntity>
+		</UiEntity>
+	)
+}
